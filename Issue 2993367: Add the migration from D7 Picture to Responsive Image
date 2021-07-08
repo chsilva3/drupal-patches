@@ -1,0 +1,337 @@
+diff --git a/core/modules/responsive_image/migrations/d7_responsive_image_styles.yml b/core/modules/responsive_image/migrations/d7_responsive_image_styles.yml
+index 0000000000..2ed283c2ee
+--- a/core/modules/responsive_image/migrations/d7_responsive_image_styles.yml
++++ b/core/modules/responsive_image/migrations/d7_responsive_image_styles.yml
+@@ -0,0 +1,21 @@
++id: d7_responsive_image_styles
++label: Responsive Image Styles
++migration_tags:
++  - Drupal 7
++  - Configuration
++source:
++  plugin: d7_responsive_image_styles
++process:
++  id: machine_name
++  label: label
++  image_style_mappings:
++    plugin: image_style_mappings
++    source:
++     - mapping
++     - breakpoint_group
++  breakpoint_group: breakpoint_group
++destination:
++  plugin: entity:responsive_image_style
++migration_dependencies:
++  required:
++    - d7_image_styles
+diff --git a/core/modules/responsive_image/src/Plugin/migrate/process/ImageStyleMappings.php b/core/modules/responsive_image/src/Plugin/migrate/process/ImageStyleMappings.php
+index 0000000000..1c070d492a
+--- a/core/modules/responsive_image/src/Plugin/migrate/process/ImageStyleMappings.php
++++ b/core/modules/responsive_image/src/Plugin/migrate/process/ImageStyleMappings.php
+@@ -0,0 +1,76 @@
++<?php
++
++namespace Drupal\responsive_image\Plugin\migrate\process;
++
++use Drupal\migrate\MigrateException;
++use Drupal\migrate\MigrateExecutableInterface;
++use Drupal\migrate\ProcessPluginBase;
++use Drupal\migrate\Row;
++
++/**
++ * Transforms image style mappings.
++ *
++ * @MigrateProcessPlugin(
++ *   id = "image_style_mappings"
++ * )
++ */
++class ImageStyleMappings extends ProcessPluginBase {
++
++  /**
++   * {@inheritdoc}
++   */
++  public function transform($value, MigrateExecutableInterface $migrate_executable, Row $row, $destination_property) {
++    if (!is_array($value)) {
++      throw new MigrateException(sprintf('Input should be an array for destination %s', $destination_property));
++    }
++
++    list($mappings, $breakpoint_group) = $value;
++
++    $new_value = NULL;
++    foreach ($mappings as $mapping_id => $mapping) {
++      // The id is in the key with the form
++      // "breakpoints.theme.my_theme_id.computer". We want the identifier after
++      // the last period.
++      preg_match('/\.([a-z0-9_]+)$/', $mapping_id, $matches);
++      foreach ($mapping as $multiplier => $multiplier_settings) {
++        if ($multiplier_settings['mapping_type'] == '_none') {
++          continue;
++        }
++        $image_style = [
++          'breakpoint_id' => $breakpoint_group . '.' . $matches[1],
++          'multiplier' => $multiplier,
++          'image_mapping_type' => $multiplier_settings['mapping_type'],
++          'image_mapping' => $this->getMultiplierSettings($multiplier_settings),
++        ];
++        $new_value[] = $image_style;
++      }
++    }
++    return $new_value;
++  }
++
++  /**
++   * Extracts multiplier settings based on it's type.
++   *
++   * @param array[] $multiplier_settings
++   *   The multiplier settings.
++   *
++   * @return array
++   *   The multiplier settings.
++   */
++  protected function getMultiplierSettings(array $multiplier_settings) {
++    $settings = [];
++
++    if ($multiplier_settings['mapping_type'] == 'image_style') {
++      $settings = $multiplier_settings['image_style'];
++    }
++    elseif ($multiplier_settings['mapping_type'] == 'sizes') {
++      $settings = [
++        'sizes' => $multiplier_settings['sizes'],
++        'sizes_image_styles' => array_values($multiplier_settings['sizes_image_styles']),
++      ];
++    }
++
++    return $settings;
++  }
++
++}
+diff --git a/core/modules/responsive_image/src/Plugin/migrate/source/d7/ResponsiveImageStyles.php b/core/modules/responsive_image/src/Plugin/migrate/source/d7/ResponsiveImageStyles.php
+index 0000000000..4ec52bc137
+--- a/core/modules/responsive_image/src/Plugin/migrate/source/d7/ResponsiveImageStyles.php
++++ b/core/modules/responsive_image/src/Plugin/migrate/source/d7/ResponsiveImageStyles.php
+@@ -0,0 +1,62 @@
++<?php
++
++namespace Drupal\responsive_image\Plugin\migrate\source\d7;
++
++use Drupal\migrate\Plugin\migrate\source\SqlBase;
++use Drupal\migrate\Row;
++
++/**
++ * Gets Drupal responsive image styles source from database.
++ *
++ * Breakpoints are YAML files in Drupal 8. If you have a custom
++ * theme and want to migrate its responsive image styles to
++ * Drupal 8, create the respective yourtheme.breakpoints.yml file at
++ * the root of the theme.
++ *
++ * @see https://www.drupal.org/docs/8/theming-drupal-8/working-with-breakpoints-in-drupal-8
++ *
++ * @MigrateSource(
++ *   id = "d7_responsive_image_styles",
++ *   source_module = "picture"
++ * )
++ */
++class ResponsiveImageStyles extends SqlBase {
++
++  /**
++   * {@inheritdoc}
++   */
++  public function query() {
++    return $this->select('picture_mapping', 'p')
++      ->fields('p');
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  public function fields() {
++    $fields = [
++      'label' => $this->t('The machine name of the mapping'),
++      'machine_name' => $this->t('The machine name of the mapping'),
++      'breakpoint_group' => $this->t('The group this mapping belongs to'),
++      'mapping' => $this->t('The mappings linked to the breakpoints group'),
++    ];
++    return $fields;
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  public function getIds() {
++    $ids['machine_name']['type'] = 'string';
++    return $ids;
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  public function prepareRow(Row $row) {
++    $row->setSourceProperty('mapping', unserialize($row->getSourceProperty('mapping')));
++    return parent::prepareRow($row);
++  }
++
++}
+diff --git a/core/modules/responsive_image/tests/src/Kernel/Migrate/d7/MigrateResponsiveImageStylesTest.php b/core/modules/responsive_image/tests/src/Kernel/Migrate/d7/MigrateResponsiveImageStylesTest.php
+index 0000000000..484a0bdb36
+--- a/core/modules/responsive_image/tests/src/Kernel/Migrate/d7/MigrateResponsiveImageStylesTest.php
++++ b/core/modules/responsive_image/tests/src/Kernel/Migrate/d7/MigrateResponsiveImageStylesTest.php
+@@ -0,0 +1,68 @@
++<?php
++
++namespace Drupal\Tests\responsive_image\Kernel\Migrate\d7;
++
++use Drupal\responsive_image\Entity\ResponsiveImageStyle;
++use Drupal\Tests\migrate_drupal\Kernel\d7\MigrateDrupal7TestBase;
++
++/**
++ * Tests migration of responsive image styles.
++ *
++ * @group responsive_image
++ */
++class MigrateResponsiveImageStylesTest extends MigrateDrupal7TestBase {
++
++  /**
++   * {@inheritdoc}
++   */
++  public static $modules = ['responsive_image', 'breakpoint', 'image'];
++
++  /**
++   * {@inheritdoc}
++   */
++  protected function setUp() {
++    parent::setUp();
++    $this->executeMigrations(['d7_image_styles', 'd7_responsive_image_styles']);
++  }
++
++  /**
++   * Tests the Drupal 7 to Drupal 8 responsive image styles migration.
++   */
++  public function testResponsiveImageStyles() {
++    $expected_image_style_mappings = [
++      [
++        'breakpoint_id' => 'responsive_image.computer',
++        'multiplier' => 'multiplier_1',
++        'image_mapping_type' => 'image_style',
++        'image_mapping' => 'custom_image_style_1',
++      ],
++      [
++        'breakpoint_id' => 'responsive_image.computer',
++        'multiplier' => 'multiplier_2',
++        'image_mapping_type' => 'sizes',
++        'image_mapping' => [
++          'sizes' => '2',
++          'sizes_image_styles' => [
++            'custom_image_style_1',
++            'custom_image_style_2',
++          ],
++        ],
++      ],
++      [
++        'breakpoint_id' => 'responsive_image.computertwo',
++        'multiplier' => 'multiplier_2',
++        'image_mapping_type' => 'sizes',
++        'image_mapping' => [
++          'sizes' => '2',
++          'sizes_image_styles' => [
++            'custom_image_style_1',
++            'custom_image_style_2',
++          ],
++        ],
++      ],
++    ];
++    $this->assertSame($expected_image_style_mappings, ResponsiveImageStyle::load('narrow')
++      ->getImageStyleMappings());
++  }
++
++}
+diff --git a/core/modules/responsive_image/tests/src/Kernel/Plugin/migrate/source/d7/ResponsiveImageStylesTest.php b/core/modules/responsive_image/tests/src/Kernel/Plugin/migrate/source/d7/ResponsiveImageStylesTest.php
+index 0000000000..6c0cbf81a1
+--- a/core/modules/responsive_image/tests/src/Kernel/Plugin/migrate/source/d7/ResponsiveImageStylesTest.php
++++ b/core/modules/responsive_image/tests/src/Kernel/Plugin/migrate/source/d7/ResponsiveImageStylesTest.php
+@@ -0,0 +1,85 @@
++<?php
++
++namespace Drupal\Tests\responsive_image\Kernel\Plugin\migrate\source\d7;
++
++use Drupal\Tests\migrate\Kernel\MigrateSqlSourceTestBase;
++
++/**
++ * Tests D7 responsive image styles source plugin.
++ *
++ * @covers \Drupal\responsive_image\Plugin\migrate\source\d7\ResponsiveImageStyles
++ * @group image
++ */
++class ResponsiveImageStylesTest extends MigrateSqlSourceTestBase {
++
++  /**
++   * {@inheritdoc}
++   */
++  public static $modules = ['responsive_image'];
++
++  /**
++   * {@inheritdoc}
++   */
++  public function providerSource() {
++    $tests = [];
++
++    // The source data.
++    $tests[0]['source_data']['picture_mapping'] = [
++      [
++        'label' => 'Narrow',
++        'machine_name' => 'narrow',
++        'breakpoint_group' => 'responsive_image',
++        'mapping' => 'a:2:{s:38:"breakpoints.theme.my_theme_id.computer";a:3:{s:12:"multiplier_1";a:2:{s:12:"mapping_type";s:11:"image_style";s:11:"image_style";s:20:"custom_image_style_1";}s:12:"multiplier_2";a:3:{s:12:"mapping_type";s:5:"sizes";s:5:"sizes";i:2;s:18:"sizes_image_styles";a:2:{i:0;s:20:"custom_image_style_1";i:1;s:20:"custom_image_style_2";}}s:12:"multiplier_3";a:1:{s:12:"mapping_type";s:5:"_none";}}s:41:"breakpoints.theme.my_theme_id.computertwo";a:1:{s:12:"multiplier_2";a:3:{s:12:"mapping_type";s:5:"sizes";s:5:"sizes";i:2;s:18:"sizes_image_styles";a:2:{i:0;s:20:"custom_image_style_1";i:1;s:20:"custom_image_style_2";}}}}',
++      ],
++    ];
++
++    // The expected results.
++    $tests[0]['expected_data'] = [
++      [
++        'label' => 'Narrow',
++        'machine_name' => 'narrow',
++        'breakpoint_group' => 'responsive_image',
++        'mapping' => [
++          'breakpoints.theme.my_theme_id.computer' =>
++            [
++              'multiplier_1' =>
++                [
++                  'mapping_type' => 'image_style',
++                  'image_style' => 'custom_image_style_1',
++                ],
++              'multiplier_2' =>
++                [
++                  'mapping_type' => 'sizes',
++                  'sizes' => 2,
++                  'sizes_image_styles' =>
++                    [
++                      0 => 'custom_image_style_1',
++                      1 => 'custom_image_style_2',
++                    ],
++                ],
++              'multiplier_3' =>
++                [
++                  'mapping_type' => '_none',
++                ],
++            ],
++          'breakpoints.theme.my_theme_id.computertwo' =>
++            [
++              'multiplier_2' =>
++                [
++                  'mapping_type' => 'sizes',
++                  'sizes' => 2,
++                  'sizes_image_styles' =>
++                    [
++                      0 => 'custom_image_style_1',
++                      1 => 'custom_image_style_2',
++                    ],
++                ],
++            ],
++        ],
++      ],
++    ];
++
++    return $tests;
++  }
++
++}
